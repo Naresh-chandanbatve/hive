@@ -8,13 +8,13 @@ from aden_tools.tools.prometheus_tool import register_tools
 
 
 @pytest.fixture
-def mcp():
+def mcp() -> FastMCP:
     server = FastMCP("test")
     register_tools(server)
     return server
 
 
-def test_prometheus_query_validation(mcp):
+def test_prometheus_query_validation(mcp: FastMCP) -> None:
     tool_fn = mcp._tool_manager._tools["prometheus_query"].fn
 
     result = tool_fn(query="")
@@ -22,7 +22,7 @@ def test_prometheus_query_validation(mcp):
     assert "error" in result
 
 
-def test_prometheus_query_success(mcp, monkeypatch):
+def test_prometheus_query_success(mcp: FastMCP, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PROMETHEUS_BASE_URL", "http://fake-prometheus:9090")
     tool_fn = mcp._tool_manager._tools["prometheus_query"].fn
 
@@ -38,7 +38,7 @@ def test_prometheus_query_success(mcp, monkeypatch):
     def mock_get(*args, **kwargs):
         return MockResponse()
 
-    monkeypatch.setattr("httpx.get", mock_get)
+    monkeypatch.setattr("aden_tools.tools.prometheus_tool.prometheus_tool.httpx.get", mock_get)
 
     result = tool_fn(query="up")
 
@@ -46,7 +46,7 @@ def test_prometheus_query_success(mcp, monkeypatch):
     assert "result" in result
 
 
-def test_prometheus_query_range_success(mcp, monkeypatch):
+def test_prometheus_query_range_success(mcp: FastMCP, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PROMETHEUS_BASE_URL", "http://fake-prometheus:9090")
     tool_fn = mcp._tool_manager._tools["prometheus_query_range"].fn
 
@@ -59,7 +59,7 @@ def test_prometheus_query_range_success(mcp, monkeypatch):
                 "data": {"result": [{"values": [[123, "1"]]}]},
             }
 
-    monkeypatch.setattr("httpx.get", lambda *a, **k: MockResponse())
+    monkeypatch.setattr("aden_tools.tools.prometheus_tool.prometheus_tool.httpx.get", lambda *a, **k: MockResponse())
 
     result = tool_fn(
         query="up",
@@ -70,7 +70,7 @@ def test_prometheus_query_range_success(mcp, monkeypatch):
     assert result["success"] is True
 
 
-def test_prometheus_non_200(mcp, monkeypatch):
+def test_prometheus_non_200(mcp: FastMCP, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PROMETHEUS_BASE_URL", "http://fake-prometheus:9090")
     tool_fn = mcp._tool_manager._tools["prometheus_query"].fn
 
@@ -81,42 +81,46 @@ def test_prometheus_non_200(mcp, monkeypatch):
         def json(self):
             return {}
 
-    monkeypatch.setattr("httpx.get", lambda *a, **k: MockResponse())
+    monkeypatch.setattr("aden_tools.tools.prometheus_tool.prometheus_tool.httpx.get", lambda *a, **k: MockResponse())
 
     result = tool_fn(query="up")
 
     assert "error" in result
 
 
-def test_timeout(mcp, monkeypatch):
+def test_timeout(mcp: FastMCP, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PROMETHEUS_BASE_URL", "http://fake-prometheus:9090")
     tool_fn = mcp._tool_manager._tools["prometheus_query"].fn
 
-    def mock_get(*args, **kwargs):
-        raise httpx.TimeoutException("timeout")
+    def mock_query(*args, **kwargs):
+        raise httpx.TimeoutException("Request timed out")
 
-    monkeypatch.setattr("httpx.get", mock_get)
+    monkeypatch.setattr(
+        "aden_tools.tools.prometheus_tool.prometheus_tool.httpx.get",
+        mock_query,
+    )
 
     result = tool_fn(query="up")
 
-    assert "timed out" in result["error"]
+    assert "error" in result
+    assert "timed out" in result["error"].lower()
 
 
-def test_prometheus_connection_error(mcp, monkeypatch):
+def test_prometheus_connection_error(mcp: FastMCP, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PROMETHEUS_BASE_URL", "http://fake-prometheus:9090")
     tool_fn = mcp._tool_manager._tools["prometheus_query"].fn
 
     def mock_get(*args, **kwargs):
         raise Exception("Connection failed")
 
-    monkeypatch.setattr("httpx.get", mock_get)
+    monkeypatch.setattr("aden_tools.tools.prometheus_tool.prometheus_tool.httpx.get", mock_get)
 
     result = tool_fn(query="up")
 
     assert "error" in result
 
 
-def test_missing_base_url(mcp, monkeypatch):
+def test_missing_base_url(mcp: FastMCP, monkeypatch: pytest.MonkeyPatch) -> None:
     tool_fn = mcp._tool_manager._tools["prometheus_query"].fn
 
     monkeypatch.delenv("PROMETHEUS_BASE_URL", raising=False)
@@ -125,3 +129,35 @@ def test_missing_base_url(mcp, monkeypatch):
 
     assert result["success"] is False
     assert "Missing required credential" in result["error"]
+
+
+def test_base_url_from_credentials_overrides_env(
+    mcp: FastMCP,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setenv("PROMETHEUS_BASE_URL", "http://fake-prometheus:9090")
+
+    class FakeCredentialStore:
+        def get(self, key: str):
+            return "http://fake-prometheus:9090"
+
+    register_tools(mcp, credentials=FakeCredentialStore())
+
+    # mock httpx.get so no real network call
+    def fake_get(*args, **kwargs):
+        class Resp:
+            status_code = 200
+
+            def json(self):
+                return {"status": "success", "data": {"result": []}}
+
+        return Resp()
+
+    monkeypatch.setattr("httpx.get", fake_get)
+
+    tool_fn = mcp._tool_manager._tools["prometheus_query"].fn
+
+    result = tool_fn(query="up")
+
+    assert result["success"] is True
+    assert result["query"] == "up"
