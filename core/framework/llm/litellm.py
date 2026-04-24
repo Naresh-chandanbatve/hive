@@ -33,6 +33,7 @@ except ImportError:
     RateLimitError = Exception  # type: ignore[assignment, misc]
 
 from framework.config import HIVE_LLM_ENDPOINT as HIVE_API_BASE
+from framework.llm.model_catalog import get_model_pricing
 from framework.llm.provider import LLMProvider, LLMResponse, Tool
 from framework.llm.stream_events import StreamEvent
 
@@ -360,6 +361,50 @@ FAILED_REQUESTS_DIR = Path.home() / ".hive" / "failed_requests"
 MAX_FAILED_REQUEST_DUMPS = 50
 
 
+def _cost_from_catalog_pricing(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cached_tokens: int = 0,
+    cache_creation_tokens: int = 0,
+) -> float:
+    """Last-resort cost calculation using curated catalog pricing.
+
+    Consulted only when the provider response carries no native cost and
+    LiteLLM's own catalog has no pricing for ``model``. Reads
+    ``pricing_usd_per_mtok`` from ``model_catalog.json``. Rates are USD per
+    million tokens.
+
+    ``cached_tokens`` and ``cache_creation_tokens`` are subsets of
+    ``input_tokens`` (see ``_extract_cache_tokens``), so subtract them from
+    the base input count to avoid double-billing. If a cache rate is absent,
+    fall back to the plain input rate.
+    """
+    if not model or (input_tokens == 0 and output_tokens == 0):
+        return 0.0
+    pricing = get_model_pricing(model)
+    if pricing is None and "/" in model:
+        # LiteLLM prefixes some ids (e.g. "openrouter/z-ai/glm-5.1"); the
+        # catalog stores the bare form ("z-ai/glm-5.1"). Strip one segment.
+        pricing = get_model_pricing(model.split("/", 1)[1])
+    if pricing is None:
+        return 0.0
+
+    per_mtok_in = pricing.get("input", 0.0)
+    per_mtok_out = pricing.get("output", 0.0)
+    per_mtok_cache_read = pricing.get("cache_read", per_mtok_in)
+    per_mtok_cache_write = pricing.get("cache_creation", per_mtok_in)
+
+    plain_input = max(input_tokens - cached_tokens - cache_creation_tokens, 0)
+    total = (
+        plain_input * per_mtok_in
+        + cached_tokens * per_mtok_cache_read
+        + cache_creation_tokens * per_mtok_cache_write
+        + output_tokens * per_mtok_out
+    ) / 1_000_000
+    return float(total) if total > 0 else 0.0
+
+
 def _extract_cost(response: Any, model: str) -> float:
     """Pull the USD cost for a non-streaming completion response.
 
@@ -372,6 +417,8 @@ def _extract_cost(response: Any, model: str) -> float:
       3. ``litellm.completion_cost(...)`` — computes from the model pricing
          table; works across Anthropic, OpenAI, and OpenRouter as long as the
          model is in LiteLLM's catalog.
+      4. ``pricing_usd_per_mtok`` from the curated model catalog — covers
+         models (e.g. GLM, Kimi, MiniMax) that LiteLLM doesn't price.
 
     Returns 0.0 for unpriced models or unexpected response shapes — cost is a
     display concern, never let it break the hot path. For streaming paths
@@ -399,6 +446,16 @@ def _extract_cost(response: Any, model: str) -> float:
             return float(computed)
     except Exception as exc:
         logger.debug("[cost] completion_cost failed for %s: %s", model, exc)
+
+    if usage is not None:
+        input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+        output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+        cache_read, cache_creation = _extract_cache_tokens(usage)
+        fallback = _cost_from_catalog_pricing(
+            model, input_tokens, output_tokens, cache_read, cache_creation
+        )
+        if fallback > 0:
+            return fallback
     return 0.0
 
 
@@ -430,10 +487,13 @@ def _cost_from_tokens(
             cache_creation_input_tokens=cache_creation_tokens,
         )
         total = (prompt_cost or 0.0) + (completion_cost or 0.0)
-        return float(total) if total > 0 else 0.0
+        if total > 0:
+            return float(total)
     except Exception as exc:
         logger.debug("[cost] cost_per_token failed for %s: %s", model, exc)
-        return 0.0
+    return _cost_from_catalog_pricing(
+        model, input_tokens, output_tokens, cached_tokens, cache_creation_tokens
+    )
 
 
 def _extract_cache_tokens(usage: Any) -> tuple[int, int]:

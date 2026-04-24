@@ -196,6 +196,31 @@ export default function QueenDM() {
         );
         replayStateRef.current = replayState;
 
+        // Sum historical llm_turn_complete events so Tokens/Cost carry over
+        // across resume. SSE does not replay llm_turn_complete (see
+        // routes_events.py _REPLAY_TYPES), so no double-count risk — live
+        // SSE deltas that may have already landed are kept via functional
+        // merge below.
+        const seed = { input: 0, output: 0, cached: 0, cacheCreated: 0, costUsd: 0 };
+        for (const evt of events) {
+          if (evt.type !== "llm_turn_complete" || !evt.data) continue;
+          const d = evt.data as Record<string, unknown>;
+          seed.input += (d.input_tokens as number) || 0;
+          seed.output += (d.output_tokens as number) || 0;
+          seed.cached += (d.cached_tokens as number) || 0;
+          seed.cacheCreated += (d.cache_creation_tokens as number) || 0;
+          seed.costUsd += (d.cost_usd as number) || 0;
+        }
+        if (!cancelled()) {
+          setTokenUsage((prev) => ({
+            input: prev.input + seed.input,
+            output: prev.output + seed.output,
+            cached: prev.cached + seed.cached,
+            cacheCreated: prev.cacheCreated + seed.cacheCreated,
+            costUsd: prev.costUsd + seed.costUsd,
+          }));
+        }
+
         // Show a banner if the server truncated older events.
         const droppedCount = Math.max(0, total - returned);
         if (truncated && droppedCount > 0) {

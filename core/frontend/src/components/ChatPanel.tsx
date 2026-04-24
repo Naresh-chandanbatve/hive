@@ -1494,7 +1494,7 @@ export default function ChatPanel({
               const costStr = cost > 0 ? `$${cost.toFixed(4)}` : "—";
               return (
                 <span className="group relative cursor-help transition-colors hover:text-muted-foreground">
-                  Tokens: {fmt(tokenUsage!.output)}
+                  Tokens: {fmt(tokenUsage!.input + tokenUsage!.output)}
                   <span
                     role="tooltip"
                     className="pointer-events-none invisible absolute bottom-full right-0 z-50 mb-2 whitespace-nowrap rounded-md border border-border bg-popover px-3 py-2 text-[11px] text-popover-foreground opacity-0 shadow-lg transition-[opacity,transform] duration-150 translate-y-1 group-hover:visible group-hover:opacity-100 group-hover:translate-y-0"

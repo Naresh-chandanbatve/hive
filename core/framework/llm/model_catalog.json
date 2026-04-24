@@ -139,7 +139,11 @@
           "label": "MiniMax M2.7 - Best coding quality",
           "recommended": true,
           "max_tokens": 40960,
-          "max_context_tokens": 180000
+          "max_context_tokens": 180000,
+          "pricing_usd_per_mtok": {
+            "input": 0.30,
+            "output": 1.20
+          }
         },
         {
           "id": "MiniMax-M2.5",
@@ -243,7 +247,12 @@
           "label": "Kimi K2.5 - Best coding",
           "recommended": true,
           "max_tokens": 32768,
-          "max_context_tokens": 200000
+          "max_context_tokens": 200000,
+          "pricing_usd_per_mtok": {
+            "input": 0.60,
+            "output": 2.50,
+            "cache_read": 0.15
+          }
         }
       ]
     },
@@ -269,7 +278,13 @@
           "label": "GLM-5.1 - Via Hive",
           "recommended": false,
           "max_tokens": 32768,
-          "max_context_tokens": 180000
+          "max_context_tokens": 180000,
+          "pricing_usd_per_mtok": {
+            "input": 1.40,
+            "output": 4.40,
+            "cache_read": 0.26,
+            "cache_creation": 0.0
+          }
         }
       ]
     },
@@ -323,14 +338,24 @@
           "label": "GLM-5.1 - Better but Slower",
           "recommended": true,
           "max_tokens": 40960,
-          "max_context_tokens": 192000
+          "max_context_tokens": 192000,
+          "pricing_usd_per_mtok": {
+            "input": 1.40,
+            "output": 4.40,
+            "cache_read": 0.26,
+            "cache_creation": 0.0
+          }
         },
         {
           "id": "minimax/minimax-m2.7",
           "label": "Minimax M2.7 - Minimax flagship",
           "recommended": false,
           "max_tokens": 40960,
-          "max_context_tokens": 180000
+          "max_context_tokens": 180000,
+          "pricing_usd_per_mtok": {
+            "input": 0.30,
+            "output": 1.20
+          }
         },
         {
           "id": "xiaomi/mimo-v2-pro",

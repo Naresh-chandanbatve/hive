@@ -27,6 +27,28 @@ def _require_list(value: Any, path: str) -> list[Any]:
     return value
 
 
+_PRICING_KEYS = ("input", "output", "cache_read", "cache_creation")
+
+
+def _validate_pricing(value: Any, path: str) -> None:
+    """Validate an optional ``pricing_usd_per_mtok`` block.
+
+    Keys are USD-per-million-tokens rates. ``input``/``output`` are required;
+    ``cache_read``/``cache_creation`` are optional. All values must be
+    non-negative numbers. Used as a last-resort fallback when neither the
+    provider nor LiteLLM's catalog reports a cost.
+    """
+    pricing = _require_mapping(value, path)
+    for key in ("input", "output"):
+        if key not in pricing:
+            raise ModelCatalogError(f"{path}.{key} is required")
+    for key, rate in pricing.items():
+        if key not in _PRICING_KEYS:
+            raise ModelCatalogError(f"{path}.{key} is not a recognized pricing field")
+        if not isinstance(rate, (int, float)) or isinstance(rate, bool) or rate < 0:
+            raise ModelCatalogError(f"{path}.{key} must be a non-negative number")
+
+
 def _validate_model_catalog(data: dict[str, Any]) -> dict[str, Any]:
     providers = _require_mapping(data.get("providers"), "providers")
 
@@ -68,6 +90,10 @@ def _validate_model_catalog(data: dict[str, Any]) -> dict[str, Any]:
                 value = model_map.get(key)
                 if not isinstance(value, int) or value <= 0:
                     raise ModelCatalogError(f"{model_path}.{key} must be a positive integer")
+
+            pricing = model_map.get("pricing_usd_per_mtok")
+            if pricing is not None:
+                _validate_pricing(pricing, f"{model_path}.pricing_usd_per_mtok")
 
         if not default_found:
             raise ModelCatalogError(
@@ -182,6 +208,25 @@ def get_model_limits(provider: str, model_id: str) -> tuple[int, int] | None:
     if not model:
         return None
     return int(model["max_tokens"]), int(model["max_context_tokens"])
+
+
+def get_model_pricing(model_id: str) -> dict[str, float] | None:
+    """Return ``pricing_usd_per_mtok`` for a model id, searching all providers.
+
+    Returns ``None`` when the model is absent from the catalog or has no
+    pricing entry. Used by the cost-extraction fallback in ``litellm.py``
+    when the provider response and LiteLLM's catalog both come up empty.
+    """
+    if not model_id:
+        return None
+    for provider_info in load_model_catalog()["providers"].values():
+        for model in provider_info["models"]:
+            if model["id"] == model_id:
+                pricing = model.get("pricing_usd_per_mtok")
+                if pricing is None:
+                    return None
+                return {key: float(rate) for key, rate in pricing.items()}
+    return None
 
 
 def get_preset(preset_id: str) -> dict[str, Any] | None:
