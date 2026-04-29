@@ -85,12 +85,45 @@ def _find_project_root() -> str:
 # When ``--write-root`` is passed on the CLI, ``WRITE_ROOT`` diverges
 # from ``PROJECT_ROOT``: reads stay permissive (so the queen can
 # reference framework skills, docs, and the hive repo), but writes
-# are confined to the write root plus the ``~/.hive/`` escape hatch.
+# are confined to the write root plus the hive-home escape hatch.
 # Without this split, the coder-tools sandbox IS the hive git
 # checkout — every queen-authored skill/ledger/script lands there as
 # untracked debris, which was the 2026-04-15 incident
 # (``~/aden/hive/x-rapid-reply/`` and siblings).
 WRITE_ROOT: str = ""
+
+
+def _hive_home_dir() -> str:
+    """Resolve the hive home dir for path-guard purposes.
+
+    Honors the ``HIVE_HOME`` env var (set by the desktop shell to a per-user
+    root like ``~/.config/Hive/users/<hash>/``); falls back to ``~/.hive`` so
+    the standalone ``hive serve`` keeps working unchanged.
+    """
+    override = os.environ.get("HIVE_HOME")
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+    return os.path.abspath(os.path.expanduser("~/.hive"))
+
+
+def _expand_user_path(path: str) -> str:
+    """``os.path.expanduser`` plus a hive-home redirect.
+
+    Skill docs and queen-facing strings frequently reference ``~/.hive/...``
+    as the canonical hive root. On the desktop ``HIVE_HOME`` lives under
+    ``~/.config/Hive/users/<hash>/``, not ``~/.hive``, so a naive
+    ``expanduser`` would route the queen's writes to the shared dev tree
+    instead of her per-user data. Redirect ``~/.hive`` → ``HIVE_HOME`` so
+    those literal references resolve to the correct root.
+    """
+    if path == "~" or path == "~/" or not path.startswith("~"):
+        return os.path.expanduser(path)
+    norm = path.replace("\\", "/")
+    if norm == "~/.hive" or norm.startswith("~/.hive/"):
+        suffix = norm[len("~/.hive") :].lstrip("/")
+        hive_home = _hive_home_dir()
+        return os.path.join(hive_home, suffix.replace("/", os.sep)) if suffix else hive_home
+    return os.path.expanduser(path)
 
 
 def _resolve_read_path(path: str) -> str:
@@ -109,18 +142,20 @@ def _resolve_read_path(path: str) -> str:
     # Normalize slashes for cross-platform (e.g. exports/hi_agent from LLM)
     path = path.replace("/", os.sep)
 
-    # Expand ~ to home directory
+    # Expand ~ to home directory (with ~/.hive redirected to HIVE_HOME so
+    # the queen's stale "~/.hive/..." references land in the right tree).
     if path.startswith("~"):
-        path = os.path.expanduser(path)
+        path = _expand_user_path(path)
 
     if os.path.isabs(path):
         resolved = os.path.abspath(path)
 
-        # Allow access to ~/.hive/ for agent session data
-        hive_dir = os.path.expanduser("~/.hive")
+        # Allow access to the hive-home tree (per-user when HIVE_HOME is
+        # set, else ``~/.hive``) for agent session data.
+        hive_dir = _hive_home_dir()
         try:
             if os.path.commonpath([resolved, hive_dir]) == hive_dir:
-                return resolved  # Path is under ~/.hive, allow it
+                return resolved  # Path is under hive home, allow it
         except ValueError:
             pass
 
@@ -176,9 +211,10 @@ def _resolve_write_path(path: str) -> str:
     """Resolve path for WRITE operations.
 
     Stricter than the read resolver: only allows writes under:
-    1. ``WRITE_ROOT`` — the agent workspace (default: ``~/.hive/workspace/``
+    1. ``WRITE_ROOT`` — the agent workspace (default: ``<hive_home>/workspace/``
        when ``--write-root`` is passed).
-    2. ``~/.hive/`` — agent session data.
+    2. The hive-home tree (per-user when ``HIVE_HOME`` is set, else
+       ``~/.hive``) — agent session data.
 
     Writes to the hive repo (``PROJECT_ROOT``) are REJECTED to keep
     the git checkout clean of queen-authored debris. Relative paths
@@ -187,12 +223,14 @@ def _resolve_write_path(path: str) -> str:
     When ``WRITE_ROOT`` equals ``PROJECT_ROOT`` (no split configured),
     this function is semantically identical to ``_resolve_read_path``.
     """
-    # Normalize slashes + expand ~
+    # Normalize slashes + expand ~ (redirecting ~/.hive → HIVE_HOME so a
+    # queen prompt that says "save under ~/.hive/colonies/..." actually
+    # writes inside the per-user hive tree, not the shared ~/.hive dev one).
     path = path.replace("/", os.sep)
     if path.startswith("~"):
-        path = os.path.expanduser(path)
+        path = _expand_user_path(path)
 
-    hive_dir = os.path.expanduser("~/.hive")
+    hive_dir = _hive_home_dir()
 
     if os.path.isabs(path):
         resolved = os.path.abspath(path)

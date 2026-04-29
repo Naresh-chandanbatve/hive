@@ -936,7 +936,9 @@ async def handle_upload_skill(request: web.Request) -> web.Response:
 
     # Resolve the write target
     if scope_kind == "user":
-        write_dir = Path.home() / ".hive" / "skills"
+        from framework.config import HIVE_HOME
+
+        write_dir = HIVE_HOME / "skills"
         overrides_path: Path | None = None
         store: SkillOverrideStore | None = None
         affected_runtimes: list = []

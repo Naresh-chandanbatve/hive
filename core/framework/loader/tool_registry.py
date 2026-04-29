@@ -88,8 +88,13 @@ class ToolRegistry:
         }
     )
 
-    # Credential directory used for change detection
-    _CREDENTIAL_DIR = Path("~/.hive/credentials/credentials").expanduser()
+    # Credential directory used for change detection. Resolved at attribute
+    # access so HIVE_HOME overrides (set by the desktop) are honoured.
+    @property
+    def _CREDENTIAL_DIR(self) -> Path:
+        from framework.config import HIVE_HOME
+
+        return HIVE_HOME / "credentials" / "credentials"
 
     def __init__(self):
         self._tools: dict[str, RegisteredTool] = {}

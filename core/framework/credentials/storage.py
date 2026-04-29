@@ -128,7 +128,9 @@ class EncryptedFileStorage(CredentialStorage):
         Initialize encrypted storage.
 
         Args:
-            base_path: Directory for credential files. Defaults to ~/.hive/credentials.
+            base_path: Directory for credential files. Defaults to
+                ``$HIVE_HOME/credentials`` (per-user) when HIVE_HOME is set,
+                else ``~/.hive/credentials``.
             encryption_key: 32-byte Fernet key. If None, reads from env var.
             key_env_var: Environment variable containing encryption key
         """
@@ -139,7 +141,14 @@ class EncryptedFileStorage(CredentialStorage):
                 "Encrypted storage requires 'cryptography'. Install with: uv pip install cryptography"
             ) from e
 
-        self.base_path = Path(base_path or self.DEFAULT_PATH).expanduser()
+        if base_path is None:
+            # Honor HIVE_HOME (set by the desktop shell to a per-user dir) so
+            # the encrypted store doesn't fork between ~/.hive and the desktop
+            # userData root. Falls back to ~/.hive/credentials when standalone.
+            from framework.config import HIVE_HOME
+
+            base_path = HIVE_HOME / "credentials"
+        self.base_path = Path(base_path).expanduser()
         self._ensure_dirs()
         self._key_env_var = key_env_var
 
