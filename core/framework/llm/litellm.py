@@ -44,17 +44,42 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
+def _api_base_needs_bearer_auth(api_base: str | None) -> bool:
+    """Return True when ``api_base`` points at an Anthropic-compatible endpoint
+    that authenticates via ``Authorization: Bearer`` rather than ``x-api-key``.
+
+    The hive-llm proxy (Rust service in hive-backend/llm/) speaks the Anthropic
+    Messages API but mints user-scoped JWTs and validates them via Bearer auth.
+    Default upstream Anthropic endpoints (api.anthropic.com, Kimi's
+    api.kimi.com/coding) keep using x-api-key, so the override is scoped to the
+    known hive-proxy hosts plus the env-configured override.
+    """
+    if not api_base:
+        return False
+    lowered = api_base.lower()
+    for host in ("adenhq.com", "open-hive.com", "127.0.0.1:8890", "localhost:8890"):
+        if host in lowered:
+            return True
+    override = os.environ.get("HIVE_LLM_BASE_URL")
+    if override and override.lower() in lowered:
+        return True
+    return False
+
+
 def _patch_litellm_anthropic_oauth() -> None:
-    """Patch litellm's Anthropic header construction to fix OAuth token handling.
+    """Patch litellm's Anthropic header construction to fix OAuth/JWT token handling.
 
-    litellm bug: validate_environment() puts the OAuth token into x-api-key,
-    but Anthropic's API rejects OAuth tokens in x-api-key. They must be sent
-    via Authorization: Bearer only, with x-api-key omitted entirely.
+    Two cases are remapped:
+    1. **Anthropic OAuth tokens** (``sk-ant-oat`` prefix). litellm puts the token
+       into ``x-api-key`` but Anthropic's API requires it on
+       ``Authorization: Bearer`` only — see BerriAI/litellm#19618.
+    2. **Hive LLM proxy bearer tokens** (any JWT). The Rust proxy at
+       hive-backend/llm/ speaks the Anthropic Messages API but authenticates
+       with ``Authorization: Bearer <jwt>``; litellm's default ``x-api-key``
+       would 401.
 
-    This patch wraps validate_environment to remove x-api-key when the
-    Authorization header carries an OAuth token (sk-ant-oat prefix).
-
-    See: https://github.com/BerriAI/litellm/issues/19618
+    Both cases share the same fix: promote whatever's in ``x-api-key`` to
+    ``Authorization: Bearer`` and drop ``x-api-key``.
     """
     try:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
@@ -95,6 +120,15 @@ def _patch_litellm_anthropic_oauth() -> None:
         oauth_prefix = f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"
         auth_is_oauth = auth.startswith(oauth_prefix)
         key_is_oauth = x_api_key.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
+        # The hive-llm proxy speaks the Anthropic Messages API but authenticates
+        # via Authorization: Bearer <jwt>; x-api-key is ignored and returns
+        # missing_auth. Promote x-api-key → Authorization for those endpoints
+        # so hive's per-user stream JWT actually authenticates the request.
+        hive_needs_remap = (
+            x_api_key
+            and not auth
+            and _api_base_needs_bearer_auth(api_base)
+        )
         if auth_is_oauth or key_is_oauth:
             token = x_api_key if key_is_oauth else auth.removeprefix("Bearer ").strip()
             result.pop("x-api-key", None)
@@ -105,6 +139,9 @@ def _patch_litellm_anthropic_oauth() -> None:
             if ANTHROPIC_OAUTH_BETA_HEADER not in beta_parts:
                 beta_parts.append(ANTHROPIC_OAUTH_BETA_HEADER)
             result["anthropic-beta"] = ",".join(beta_parts)
+        elif hive_needs_remap:
+            result.pop("x-api-key", None)
+            result["authorization"] = f"Bearer {x_api_key}"
         return result
 
     AnthropicModelInfo.validate_environment = _patched_validate_environment
