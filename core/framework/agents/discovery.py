@@ -152,7 +152,7 @@ def _count_runs(agent_name: str) -> int:
     return len(run_ids)
 
 
-_EXCLUDED_JSON_STEMS = {"agent", "flowchart", "triggers", "configuration", "metadata"}
+_EXCLUDED_JSON_STEMS = {"agent", "flowchart", "triggers", "configuration", "metadata", "tasks"}
 
 
 def _is_colony_dir(path: Path) -> bool:

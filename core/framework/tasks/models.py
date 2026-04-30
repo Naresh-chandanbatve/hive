@@ -49,7 +49,7 @@ class TaskRecord(BaseModel):
 
 
 class TaskListMeta(BaseModel):
-    """Per-list metadata stored in ``meta.json`` next to the task files."""
+    """Per-list metadata. Embedded in ``TaskListDocument``."""
 
     task_list_id: str
     role: TaskListRole
@@ -57,6 +57,18 @@ class TaskListMeta(BaseModel):
     created_at: float = Field(default_factory=time.time)
     last_seen_session_ids: list[str] = Field(default_factory=list)
     schema_version: int = 1
+
+
+class TaskListDocument(BaseModel):
+    """Whole task list as a single JSON document on disk.
+
+    Lives at ``{task_list_path(list_id)}/tasks.json``; the list-lock
+    sentinel is its sibling ``tasks.json.lock``.
+    """
+
+    meta: TaskListMeta
+    highwatermark: int = 0
+    tasks: list[TaskRecord] = Field(default_factory=list)
 
 
 # Tagged union for claim_task_with_busy_check.  Used by run_parallel_workers

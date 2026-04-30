@@ -7,6 +7,7 @@ primitives the rest of the system relies on.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -263,11 +264,119 @@ async def test_ensure_task_list_caps_history(store: TaskStore, list_id: str) -> 
 @pytest.mark.asyncio
 async def test_colony_path(store: TaskStore, tmp_path: Path) -> None:
     await store.ensure_task_list("colony:abc", role=TaskListRole.TEMPLATE)
-    assert (tmp_path / "colonies" / "abc" / "tasks" / "meta.json").exists()
+    assert (tmp_path / "colonies" / "abc" / "tasks.json").exists()
 
 
 @pytest.mark.asyncio
 async def test_session_path(store: TaskStore, tmp_path: Path) -> None:
     await store.ensure_task_list("session:agent_x:sess_y", role=TaskListRole.SESSION)
-    p = tmp_path / "agents" / "agent_x" / "sessions" / "sess_y" / "tasks" / "meta.json"
+    p = tmp_path / "agents" / "agent_x" / "sessions" / "sess_y" / "tasks.json"
     assert p.exists()
+
+
+@pytest.mark.asyncio
+async def test_canonical_queen_session_dir_wins(store: TaskStore, tmp_path: Path) -> None:
+    """When ``agents/queens/{name}/sessions/{sid}/`` exists on disk, the task
+    doc lands there — beside conversations/events/summary — instead of in
+    the orphaned ``agents/{agent_id}/sessions/{sid}/`` location.
+    """
+    sid = "session_20260429_test"
+    canonical = tmp_path / "agents" / "queens" / "queen_growth" / "sessions" / sid
+    canonical.mkdir(parents=True)
+    # Pretend the rest of the session is here.
+    (canonical / "events.jsonl").write_text("", encoding="utf-8")
+
+    list_id = f"session:queen:{sid}"
+    await store.ensure_task_list(list_id, role=TaskListRole.SESSION)
+    rec = await store.create_task(list_id, subject="hello")
+
+    assert (canonical / "tasks.json").exists()
+    assert not (tmp_path / "agents" / "queen" / "sessions" / sid / "tasks.json").exists()
+    fetched = await store.list_tasks(list_id)
+    assert [r.id for r in fetched] == [rec.id]
+
+
+# ---------------------------------------------------------------------------
+# Lazy migration from the older fan-out layout
+# ---------------------------------------------------------------------------
+
+
+def _seed_legacy_session(tmp_path: Path, agent: str, sess: str, n_tasks: int) -> Path:
+    """Hand-craft an older ``{root}/tasks/`` layout the way it used to live
+    on disk, so we can prove the lazy migration folds it correctly.
+    """
+    legacy = tmp_path / "agents" / agent / "sessions" / sess / "tasks"
+    (legacy / "tasks").mkdir(parents=True)
+    list_id = f"session:{agent}:{sess}"
+    (legacy / "meta.json").write_text(
+        json.dumps(
+            {
+                "task_list_id": list_id,
+                "role": "session",
+                "creator_agent_id": None,
+                "created_at": 1000.0,
+                "last_seen_session_ids": ["s1"],
+                "schema_version": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (legacy / ".highwatermark").write_text(str(n_tasks), encoding="utf-8")
+    (legacy / ".lock").write_text("", encoding="utf-8")
+    for i in range(1, n_tasks + 1):
+        (legacy / "tasks" / f"{i:04d}.json").write_text(
+            json.dumps(
+                {
+                    "id": i,
+                    "subject": f"legacy {i}",
+                    "description": "",
+                    "active_form": None,
+                    "owner": None,
+                    "status": "pending",
+                    "blocks": [],
+                    "blocked_by": [],
+                    "metadata": {},
+                    "created_at": 1000.0 + i,
+                    "updated_at": 1000.0 + i,
+                }
+            ),
+            encoding="utf-8",
+        )
+    return legacy
+
+
+@pytest.mark.asyncio
+async def test_legacy_layout_migrates_on_first_read(store: TaskStore, tmp_path: Path) -> None:
+    legacy = _seed_legacy_session(tmp_path, "agent_z", "sess_z", 3)
+    list_id = "session:agent_z:sess_z"
+    # First read should fold the legacy fan-out into tasks.json.
+    records = await store.list_tasks(list_id)
+    assert [r.id for r in records] == [1, 2, 3]
+    assert [r.subject for r in records] == ["legacy 1", "legacy 2", "legacy 3"]
+    # New doc exists; the legacy dir is gone.
+    new_doc = tmp_path / "agents" / "agent_z" / "sessions" / "sess_z" / "tasks.json"
+    assert new_doc.exists()
+    assert not legacy.exists()
+    # Highwatermark is preserved — next id is 4, not 1.
+    new_rec = await store.create_task(list_id, subject="post-migration")
+    assert new_rec.id == 4
+
+
+@pytest.mark.asyncio
+async def test_legacy_layout_migrates_on_first_write(store: TaskStore, tmp_path: Path) -> None:
+    _seed_legacy_session(tmp_path, "agent_w", "sess_w", 2)
+    list_id = "session:agent_w:sess_w"
+    # Update a legacy task — must trigger migration, then mutate.
+    new, changed = await store.update_task(list_id, 2, status=TaskStatus.IN_PROGRESS)
+    assert new is not None
+    assert changed == ["status"]
+    assert new.status == TaskStatus.IN_PROGRESS
+    # Doc reflects both legacy tasks.
+    listed = await store.list_tasks(list_id)
+    assert len(listed) == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_list_exists(store: TaskStore, tmp_path: Path) -> None:
+    _seed_legacy_session(tmp_path, "agent_q", "sess_q", 1)
+    assert await store.list_exists("session:agent_q:sess_q")
