@@ -1040,6 +1040,7 @@ class AgentLoop(AgentProtocol):
                         tool_calls=logged_tool_calls,
                         tool_results=real_tool_results,
                         token_counts=turn_tokens,
+                        tools=tools,
                     )
 
                     # DS-13: inject context preservation warning once when token usage

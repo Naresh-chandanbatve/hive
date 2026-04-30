@@ -9,7 +9,7 @@ write. Errors are silently swallowed — this must never break the agent.
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import IO, Any
 
@@ -37,6 +37,28 @@ def _open_log() -> IO[str] | None:
     return open(path, "a", encoding="utf-8")  # noqa: SIM115
 
 
+def _serialize_tools(tools: Any) -> list[dict[str, Any]]:
+    """Reduce a list of Tool dataclasses to the schema fields shown to the LLM.
+
+    Best-effort: unknown shapes fall back to ``str()`` so logging never raises.
+    """
+    if not tools:
+        return []
+    out: list[dict[str, Any]] = []
+    for tool in tools:
+        try:
+            out.append(
+                {
+                    "name": getattr(tool, "name", ""),
+                    "description": getattr(tool, "description", ""),
+                    "parameters": getattr(tool, "parameters", {}) or {},
+                }
+            )
+        except Exception:
+            out.append({"name": str(tool)})
+    return out
+
+
 def log_llm_turn(
     *,
     node_id: str,
@@ -49,6 +71,7 @@ def log_llm_turn(
     tool_calls: list[dict[str, Any]],
     tool_results: list[dict[str, Any]],
     token_counts: dict[str, Any],
+    tools: list[Any] | None = None,
 ) -> None:
     """Write one JSONL line capturing a complete LLM turn.
 
@@ -65,12 +88,15 @@ def log_llm_turn(
         if _log_file is None:
             return
         record = {
-            "timestamp": datetime.now().isoformat(),
+            # UTC + offset matches tool_call start_timestamp (agent_loop.py)
+            # so the viewer can render every event in one consistent local zone.
+            "timestamp": datetime.now(UTC).isoformat(),
             "node_id": node_id,
             "stream_id": stream_id,
             "execution_id": execution_id,
             "iteration": iteration,
             "system_prompt": system_prompt,
+            "tools": _serialize_tools(tools),
             "messages": messages,
             "assistant_text": assistant_text,
             "tool_calls": tool_calls,
