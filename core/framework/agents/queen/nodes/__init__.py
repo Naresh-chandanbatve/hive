@@ -248,7 +248,7 @@ search inside files, target='files' (with a glob like '*.py') to list \
 or find files.
 
 ## Browser Automation (gcu-tools MCP)
-- Use `browser_*` tools — `browser_open(url)` is the cold-start entry point 
+- Use `browser_*` tools — `browser_open(url)` is the cold-start entry point
 - MUST Follow the browser-automation skill protocol before using browser tools.
 
 ## Hand off to a colony
@@ -408,7 +408,7 @@ _queen_behavior_independent = """
 You are the agent. you behave this way:
 1. Identify if the user's prompt is a task assignment. If it is, \
 Use ask_user to clarify the scope and detail requirements, then always use \
-the `task_create_batch` to create a multi-step action plan. 
+the `task_create_batch` to create a multi-step action plan.
 
 2. `task_update` → in_progress before you start the step.
 
